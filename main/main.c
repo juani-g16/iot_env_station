@@ -1,10 +1,12 @@
 #include <stdio.h>
 #include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
+
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -20,6 +22,11 @@
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
+#include "lwip/netdb.h"
+
+#include "mqtt_client.h"
 
 #define MEASURE_INTERVAL 60 * 1000
 #define WIFI_RECONNECT_INTERVAL_MS 60 * 1000
@@ -87,19 +94,23 @@ TimerHandle_t timerDHT;
 QueueHandle_t displayQueue;
 QueueHandle_t mqttQueue;
 
+bool MQTT_CONNEECTED = false;
+esp_mqtt_client_handle_t client = NULL;
+
 static const char *TAG = "iot_env_station";
 
 esp_err_t set_timer(void);
 esp_err_t dht_init(void);
 esp_err_t create_tasks(void);
+static void mqtt_app_start(void);
 
 void measure_temp_hum(TimerHandle_t timer);
 void task_show_data_oled(void *args);
 void task_send_data_mqtt(void *args);
-void wifi_task(void *args);
+void task_wifi(void *args);
 
-static void event_handler(void *arg, esp_event_base_t event_base,
-                          int32_t event_id, void *event_data)
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
@@ -114,7 +125,54 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        mqtt_app_start();
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    // ESP_LOGI(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
+    switch ((esp_mqtt_event_id_t)event_id)
+    {
+    case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+        MQTT_CONNEECTED = true;
+
+        msg_id = esp_mqtt_client_subscribe(client, "/home/temp", 0);
+        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "/home/humidity", 1);
+        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+        break;
+    case MQTT_EVENT_DISCONNECTED:
+        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+        MQTT_CONNEECTED = false;
+        break;
+
+    case MQTT_EVENT_SUBSCRIBED:
+        ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+        break;
+    case MQTT_EVENT_UNSUBSCRIBED:
+        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        break;
+    case MQTT_EVENT_PUBLISHED:
+        ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        break;
+    case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+        printf("DATA=%.*s\r\n", event->data_len, event->data);
+        break;
+    case MQTT_EVENT_ERROR:
+        ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+        break;
+    default:
+        ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+        break;
     }
 }
 
@@ -210,7 +268,7 @@ esp_err_t create_tasks(void)
         return ESP_FAIL;
     }
 
-    if (xTaskCreate(wifi_task,
+    if (xTaskCreate(task_wifi,
                     "Task to connect to wifi",
                     STACK_SIZE,
                     &ucParameterToPass,
@@ -221,6 +279,18 @@ esp_err_t create_tasks(void)
     }
 
     return ESP_OK;
+}
+
+static void mqtt_app_start(void)
+{
+    ESP_LOGI(TAG, "STARTING MQTT");
+    esp_mqtt_client_config_t mqttConfig = {
+        .broker.address.uri = CONFIG_BROKER_URI,
+    };
+
+    client = esp_mqtt_client_init(&mqttConfig);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
+    esp_mqtt_client_start(client);
 }
 
 void task_show_data_oled(void *args)
@@ -253,15 +323,15 @@ void task_show_data_oled(void *args)
 
     while (true)
     {
-        if (xQueueReceive(displayQueue, &recData, pdMS_TO_TICKS(MEASURE_INTERVAL)))
+        if (xQueueReceive(displayQueue, &recData, portMAX_DELAY))
         {
-            char tmp[20], hum[20];
-            sprintf(tmp, "Temp: %.2fC", recData.temperature);
+            char temp[20], hum[20];
+            sprintf(temp, "Temp: %.2fC", recData.temperature);
             sprintf(hum, "Hum: %.2f %%", recData.humidity);
             u8g2_ClearBuffer(&u8g2);
             u8g2_DrawStr(&u8g2, 0, 12, "Sensor Temp/Hum");
             u8g2_DrawHLine(&u8g2, 0, 14, 128);
-            u8g2_DrawStr(&u8g2, 0, 36, tmp);
+            u8g2_DrawStr(&u8g2, 0, 36, temp);
             u8g2_DrawGlyph(&u8g2, 110, 36, 0x2600);
             u8g2_DrawStr(&u8g2, 0, 60, hum);
             u8g2_DrawGlyph(&u8g2, 110, 60, 0x2614);
@@ -279,10 +349,15 @@ void task_show_data_oled(void *args)
 void task_send_data_mqtt(void *args)
 {
     dht_data_t recData = {0};
+    char temp[20], hum[20];
     while (true)
     {
-        if (xQueueReceive(mqttQueue, &recData, pdMS_TO_TICKS(MEASURE_INTERVAL)))
+        if ((xQueueReceive(mqttQueue, &recData, portMAX_DELAY)) && MQTT_CONNEECTED)
         {
+            sprintf(temp, "{\"Temp\":\"%.2fC\"}", recData.temperature);
+            sprintf(hum, "{\"Hum\":\"%.2f%%\"}", recData.humidity);
+            esp_mqtt_client_publish(client, "/home/temp", temp, 0, 0, 0);
+            esp_mqtt_client_publish(client, "/home/humidity", hum, 0, 0, 0);
             ESP_LOGI(TAG, "Data sent to MQTT");
         }
         else
@@ -316,7 +391,7 @@ void measure_temp_hum(TimerHandle_t timer)
     }
 }
 
-void wifi_task(void *args)
+void task_wifi(void *args)
 {
     s_wifi_event_group = xEventGroupCreate();
 
@@ -332,12 +407,12 @@ void wifi_task(void *args)
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
-                                                        &event_handler,
+                                                        &wifi_event_handler,
                                                         NULL,
                                                         &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                                                         IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
+                                                        &wifi_event_handler,
                                                         NULL,
                                                         &instance_got_ip));
 
