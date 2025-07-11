@@ -22,6 +22,7 @@
 #include "lwip/sys.h"
 
 #define MEASURE_INTERVAL 60 * 1000
+#define WIFI_RECONNECT_INTERVAL_MS 60 * 1000
 #define TIMER_ID 1
 #define STACK_SIZE 4 * 1024
 #define MAX_Q_SIZE 10
@@ -71,7 +72,7 @@ static EventGroupHandle_t s_wifi_event_group;
  * - we are connected to the AP with an IP
  * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT BIT1
+// #define WIFI_FAIL_BIT BIT1
 
 typedef struct
 {
@@ -79,7 +80,7 @@ typedef struct
     float humidity;
 } dht_data_t;
 
-static int s_retry_num = 0;
+// static int s_retry_num = 0;
 dht_sensor_type_t sensor_type;
 gpio_num_t gpio_num;
 TimerHandle_t timerDHT;
@@ -95,7 +96,7 @@ esp_err_t create_tasks(void);
 void measure_temp_hum(TimerHandle_t timer);
 void task_show_data_oled(void *args);
 void task_send_data_mqtt(void *args);
-void wifi_init_sta(void);
+void wifi_task(void *args);
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
@@ -106,23 +107,13 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY)
-        {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        }
-        else
-        {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
-        }
-        ESP_LOGI(TAG, "connect to the AP fail");
+        ESP_LOGI(TAG, "Disconnected from AP, will try to reconnect in 60 seconds");
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -137,9 +128,6 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-    wifi_init_sta();
 
     displayQueue = xQueueCreate(MAX_Q_SIZE, sizeof(dht_data_t));
     mqttQueue = xQueueCreate(MAX_Q_SIZE, sizeof(dht_data_t));
@@ -200,6 +188,7 @@ esp_err_t create_tasks(void)
     static uint8_t ucParameterToPass;
     TaskHandle_t displayHandle = NULL;
     TaskHandle_t mqttHandle = NULL;
+    TaskHandle_t wifiHandle = NULL;
 
     if (xTaskCreate(task_show_data_oled,
                     "Show read data on oled display",
@@ -217,6 +206,16 @@ esp_err_t create_tasks(void)
                     &ucParameterToPass,
                     2,
                     &mqttHandle) != pdPASS)
+    {
+        return ESP_FAIL;
+    }
+
+    if (xTaskCreate(wifi_task,
+                    "Task to connect to wifi",
+                    STACK_SIZE,
+                    &ucParameterToPass,
+                    3,
+                    &wifiHandle) != pdPASS)
     {
         return ESP_FAIL;
     }
@@ -284,7 +283,7 @@ void task_send_data_mqtt(void *args)
     {
         if (xQueueReceive(mqttQueue, &recData, pdMS_TO_TICKS(MEASURE_INTERVAL)))
         {
-            /*code*/
+            ESP_LOGI(TAG, "Data sent to MQTT");
         }
         else
         {
@@ -317,7 +316,7 @@ void measure_temp_hum(TimerHandle_t timer)
     }
 }
 
-void wifi_init_sta(void)
+void wifi_task(void *args)
 {
     s_wifi_event_group = xEventGroupCreate();
 
@@ -360,30 +359,21 @@ void wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_LOGI(TAG, "wifi_task started and wifi driver started");
 
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           portMAX_DELAY);
+    while (1)
+    {
+        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                               WIFI_CONNECTED_BIT,
+                                               pdFALSE,
+                                               pdFALSE,
+                                               pdMS_TO_TICKS(WIFI_RECONNECT_INTERVAL_MS));
 
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT)
-    {
-        ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    }
-    else if (bits & WIFI_FAIL_BIT)
-    {
-        ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    }
-    else
-    {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        if ((bits & WIFI_CONNECTED_BIT) == 0)
+        {
+            ESP_LOGI(TAG, "WiFi not connected, trying to reconnect...");
+            esp_wifi_connect();
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
