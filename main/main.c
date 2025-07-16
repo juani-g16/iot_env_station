@@ -511,9 +511,12 @@ void get_current_date_time(char *date_time)
 char *create_json_payload(const dht_data_t *data)
 {
     cJSON *root = cJSON_CreateObject();
+    char tempStr[7], humStr[7];
+    sprintf(tempStr, "%.2f", data->temperature);
+    sprintf(humStr, "%.2f", data->humidity);
 
-    cJSON_AddNumberToObject(root, "temperature", data->temperature);
-    cJSON_AddNumberToObject(root, "humidity", data->humidity);
+    cJSON_AddStringToObject(root, "temperature", tempStr);
+    cJSON_AddStringToObject(root, "humidity", humStr);
     cJSON_AddStringToObject(root, "timestamp", data->timestamp);
 
     // Convert to string
