@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,12 +28,16 @@
 #include "lwip/netdb.h"
 
 #include "mqtt_client.h"
+#include "esp_sntp.h"
+
+#include "cJSON.h"
 
 #define MEASURE_INTERVAL 60 * 1000
 #define WIFI_RECONNECT_INTERVAL_MS 60 * 1000
 #define TIMER_ID 1
 #define STACK_SIZE 4 * 1024
 #define MAX_Q_SIZE 10
+#define ISO8601_STR_LEN 25 // "YYYY-MM-DDTHH:MM:SSZ" + null
 
 #define CONFIG_EXAMPLE_INTERNAL_PULLUP 0
 #define CONFIG_EXAMPLE_TYPE_DHT11 0
@@ -85,14 +90,16 @@ typedef struct
 {
     float temperature;
     float humidity;
+    char timestamp[ISO8601_STR_LEN]; // ISO 8601 format
 } dht_data_t;
 
-// static int s_retry_num = 0;
 dht_sensor_type_t sensor_type;
 gpio_num_t gpio_num;
 TimerHandle_t timerDHT;
 QueueHandle_t displayQueue;
 QueueHandle_t mqttQueue;
+
+char Current_Date_Time[100];
 
 bool MQTT_CONNEECTED = false;
 esp_mqtt_client_handle_t client = NULL;
@@ -104,10 +111,19 @@ esp_err_t dht_init(void);
 esp_err_t create_tasks(void);
 static void mqtt_app_start(void);
 
+void initialize_sntp(void);
+void get_current_date_time(char *date_time);
+char *create_json_payload(const dht_data_t *data);
+
 void measure_temp_hum(TimerHandle_t timer);
 void task_show_data_oled(void *args);
 void task_send_data_mqtt(void *args);
 void task_wifi(void *args);
+
+static void time_sync_notification_cb(struct timeval *tv)
+{
+    ESP_LOGI(TAG, "Notification of a time synchronization event");
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -125,6 +141,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        initialize_sntp();
         mqtt_app_start();
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -149,7 +166,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+        ESP_LOGW(TAG, "MQTT_EVENT_DISCONNECTED");
         MQTT_CONNEECTED = false;
         break;
 
@@ -157,13 +174,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
-        ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        ESP_LOGW(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
         break;
     case MQTT_EVENT_PUBLISHED:
         ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
         break;
     case MQTT_EVENT_DATA:
-        ESP_LOGI(TAG, "MQTT_EVENT_DATA");
         printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
         printf("DATA=%.*s\r\n", event->data_len, event->data);
         break;
@@ -295,7 +311,7 @@ static void mqtt_app_start(void)
 
 void task_show_data_oled(void *args)
 {
-    dht_data_t recData = {0};
+    dht_data_t sensorData = {0};
     /* OLED Display Setup*/
     u8g2_t u8g2;
     u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
@@ -323,18 +339,27 @@ void task_show_data_oled(void *args)
 
     while (true)
     {
-        if (xQueueReceive(displayQueue, &recData, portMAX_DELAY))
+        if (xQueueReceive(displayQueue, &sensorData, portMAX_DELAY))
         {
+            struct tm timeinfo;
             char temp[20], hum[20];
-            sprintf(temp, "Temp: %.2fC", recData.temperature);
-            sprintf(hum, "Hum: %.2f %%", recData.humidity);
+            char date_str[17];
+            char time_str[12];
+            // Parse ISO8601 string back to time
+            strptime(sensorData.timestamp, "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+            // Format the date as "dd/mm/YYYY"
+            strftime(date_str, sizeof(date_str), "Date: %d/%m/%Y", &timeinfo);
+            // Format the time as "HH:mm"
+            strftime(time_str, sizeof(time_str), "Time: %H:%M", &timeinfo);
+            sprintf(temp, "Temp: %.2fC", sensorData.temperature);
+            sprintf(hum, "Hum:  %.2f %%", sensorData.humidity);
             u8g2_ClearBuffer(&u8g2);
-            u8g2_DrawStr(&u8g2, 0, 12, "Sensor Temp/Hum");
-            u8g2_DrawHLine(&u8g2, 0, 14, 128);
-            u8g2_DrawStr(&u8g2, 0, 36, temp);
-            u8g2_DrawGlyph(&u8g2, 110, 36, 0x2600);
-            u8g2_DrawStr(&u8g2, 0, 60, hum);
-            u8g2_DrawGlyph(&u8g2, 110, 60, 0x2614);
+            u8g2_DrawStr(&u8g2, 0, 12, date_str);
+            u8g2_DrawStr(&u8g2, 0, 28, time_str);
+            u8g2_DrawStr(&u8g2, 0, 46, temp);
+            u8g2_DrawGlyph(&u8g2, 110, 46, 0x2600);
+            u8g2_DrawStr(&u8g2, 0, 62, hum);
+            u8g2_DrawGlyph(&u8g2, 110, 62, 0x2614);
             u8g2_SendBuffer(&u8g2); // Send the buffer data to display
         }
         else
@@ -348,17 +373,15 @@ void task_show_data_oled(void *args)
 
 void task_send_data_mqtt(void *args)
 {
-    dht_data_t recData = {0};
-    char temp[20], hum[20];
+    dht_data_t sensorData = {0};
     while (true)
     {
-        if ((xQueueReceive(mqttQueue, &recData, portMAX_DELAY)) && MQTT_CONNEECTED)
+        if ((xQueueReceive(mqttQueue, &sensorData, portMAX_DELAY)) && MQTT_CONNEECTED)
         {
-            sprintf(temp, "{\"Temp\":\"%.2fC\"}", recData.temperature);
-            sprintf(hum, "{\"Hum\":\"%.2f%%\"}", recData.humidity);
-            esp_mqtt_client_publish(client, "/home/temp", temp, 0, 0, 0);
-            esp_mqtt_client_publish(client, "/home/humidity", hum, 0, 0, 0);
-            ESP_LOGI(TAG, "Data sent to MQTT");
+            // Convert to JSON string
+            char *json_str = create_json_payload(&sensorData);
+            esp_mqtt_client_publish(client, "/home/office/dht", json_str, 0, 0, 0);
+            free(json_str);
         }
         else
         {
@@ -373,9 +396,9 @@ void measure_temp_hum(TimerHandle_t timer)
     esp_err_t res;
     dht_data_t dhtData;
     res = dht_read_float_data(sensor_type, gpio_num, &dhtData.humidity, &dhtData.temperature);
+    get_current_date_time(dhtData.timestamp);
     if (res == ESP_OK)
     {
-        ESP_LOGI(TAG, "Sending data: Temp: %.2fC - Humidity: %.2f%%", dhtData.temperature, dhtData.humidity);
         if (xQueueSend(displayQueue, &dhtData, pdMS_TO_TICKS(100)) != pdPASS)
         {
             ESP_LOGE(TAG, "Error sending data to display queue");
@@ -451,4 +474,54 @@ void task_wifi(void *args)
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+}
+
+void initialize_sntp(void)
+{
+    ESP_LOGI(TAG, "Initializing SNTP");
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    esp_sntp_init();
+
+    // Set timezone to Spanish Peninsula Standard Time
+    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+    tzset();
+
+    time_t now = 0;
+    struct tm timeinfo = {0};
+    int retry = 0;
+    const int retry_count = 10;
+
+    while (timeinfo.tm_year < (2020 - 1900) && ++retry < retry_count)
+    {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d)", retry);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        time(&now);
+        localtime_r(&now, &timeinfo);
+    }
+}
+
+void get_current_date_time(char *date_time)
+{
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    strftime(date_time, ISO8601_STR_LEN, "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+}
+
+char *create_json_payload(const dht_data_t *data)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    cJSON_AddNumberToObject(root, "temperature", data->temperature);
+    cJSON_AddNumberToObject(root, "humidity", data->humidity);
+    cJSON_AddStringToObject(root, "timestamp", data->timestamp);
+
+    // Convert to string
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    return json_str;
 }

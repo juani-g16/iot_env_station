@@ -1,0 +1,231 @@
+[
+    {
+        "id": "52777ab00f511cdc",
+        "type": "tab",
+        "label": "IoT Env Station",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "280cbfe15e52a686",
+        "type": "ui_gauge",
+        "z": "52777ab00f511cdc",
+        "name": "",
+        "group": "cb52c478e779857a",
+        "order": 0,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Humidity",
+        "label": "%",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "100",
+        "colors": [
+            "#a8e5e6",
+            "#20afdf",
+            "#3b31c4"
+        ],
+        "seg1": "50",
+        "seg2": "75",
+        "diff": false,
+        "className": "",
+        "x": 600,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "786e31aaf57d52c6",
+        "type": "mqtt in",
+        "z": "52777ab00f511cdc",
+        "name": "",
+        "topic": "/home/office/dht",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "0945af488202847d",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 180,
+        "y": 400,
+        "wires": [
+            [
+                "845bd26f55f8d3c2",
+                "2b307c281d03018a",
+                "0ebf7a3deb8b9ca5"
+            ]
+        ]
+    },
+    {
+        "id": "0d2de5a896529e63",
+        "type": "ui_chart",
+        "z": "52777ab00f511cdc",
+        "name": "",
+        "group": "cb52c478e779857a",
+        "order": 2,
+        "width": 0,
+        "height": 0,
+        "label": "Temperature",
+        "chartType": "line",
+        "legend": "false",
+        "xformat": "HH:mm",
+        "interpolate": "linear",
+        "nodata": "",
+        "dot": false,
+        "ymin": "-15",
+        "ymax": "55",
+        "removeOlder": "6",
+        "removeOlderPoints": "",
+        "removeOlderUnit": "3600",
+        "cutout": 0,
+        "useOneColor": false,
+        "useUTC": false,
+        "colors": [
+            "#1f77b4",
+            "#aec7e8",
+            "#ff7f0e",
+            "#2fa72f",
+            "#98df8a",
+            "#d62728",
+            "#ff9896",
+            "#9467bd",
+            "#c5b0d5"
+        ],
+        "outputs": 1,
+        "useDifferentColor": false,
+        "className": "",
+        "x": 610,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "845bd26f55f8d3c2",
+        "type": "function",
+        "z": "52777ab00f511cdc",
+        "name": "get temp",
+        "func": "// Function Node\nmsg.payload = Math.ceil(msg.payload.temperature*100)/100 ;\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 320,
+        "wires": [
+            [
+                "0d2de5a896529e63"
+            ]
+        ]
+    },
+    {
+        "id": "2b307c281d03018a",
+        "type": "function",
+        "z": "52777ab00f511cdc",
+        "name": "get hum",
+        "func": "// Function Node\nmsg.payload = Math.ceil(msg.payload.humidity*100)/100 ;\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 400,
+        "wires": [
+            [
+                "280cbfe15e52a686"
+            ]
+        ]
+    },
+    {
+        "id": "4e62bc4ed4dec534",
+        "type": "debug",
+        "z": "52777ab00f511cdc",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 600,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "0ebf7a3deb8b9ca5",
+        "type": "function",
+        "z": "52777ab00f511cdc",
+        "name": "get hum",
+        "func": "// Function Node\nmsg.payload = msg.payload.timestamp;\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 400,
+        "y": 480,
+        "wires": [
+            [
+                "4e62bc4ed4dec534"
+            ]
+        ]
+    },
+    {
+        "id": "cb52c478e779857a",
+        "type": "ui_group",
+        "name": "Temperature and Humidity",
+        "tab": "3cc7518620e66d5a",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false,
+        "className": ""
+    },
+    {
+        "id": "0945af488202847d",
+        "type": "mqtt-broker",
+        "name": "IoT Env Station",
+        "broker": "ws://broker.emqx.io:8083/mqtt",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "5",
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "Test",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "{\"msg\":\"Connected to broker\"}",
+        "birthMsg": {},
+        "closeTopic": "Test",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "{\"msg\":\"Disconnected from broker\"}",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "3cc7518620e66d5a",
+        "type": "ui_tab",
+        "name": "Home",
+        "icon": "dashboard",
+        "disabled": false,
+        "hidden": false
+    }
+]
