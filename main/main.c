@@ -101,7 +101,7 @@ QueueHandle_t mqttQueue;
 
 char Current_Date_Time[100];
 
-bool MQTT_CONNEECTED = false;
+bool MQTT_CONNECTED = false;
 esp_mqtt_client_handle_t client = NULL;
 
 static const char *TAG = "iot_env_station";
@@ -157,17 +157,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-        MQTT_CONNEECTED = true;
+        MQTT_CONNECTED = true;
 
-        msg_id = esp_mqtt_client_subscribe(client, "/home/temp", 0);
-        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_subscribe(client, "/home/humidity", 1);
+        msg_id = esp_mqtt_client_subscribe(client, "/home/office/dht", 0);
         ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "MQTT_EVENT_DISCONNECTED");
-        MQTT_CONNEECTED = false;
+        MQTT_CONNECTED = false;
         break;
 
     case MQTT_EVENT_SUBSCRIBED:
@@ -376,7 +373,7 @@ void task_send_data_mqtt(void *args)
     dht_data_t sensorData = {0};
     while (true)
     {
-        if ((xQueueReceive(mqttQueue, &sensorData, portMAX_DELAY)) && MQTT_CONNEECTED)
+        if ((xQueueReceive(mqttQueue, &sensorData, portMAX_DELAY)) && MQTT_CONNECTED)
         {
             // Convert to JSON string
             char *json_str = create_json_payload(&sensorData);
