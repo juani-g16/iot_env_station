@@ -15,6 +15,6 @@ typedef struct
     char timestamp[ISO8601_STR_LEN]; // ISO 8601 format
 } dht_data_t;
 
-esp_err_t dht_init(void);
+esp_err_t setup_dht(void);
 
 #endif

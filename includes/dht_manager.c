@@ -1,7 +1,7 @@
 
 #include "dht_manager.h"
 
-esp_err_t dht_init(void)
+esp_err_t setup_dht(void)
 {
     esp_err_t res;
     // Enable internal pull-up resistor if specified in menuconfig

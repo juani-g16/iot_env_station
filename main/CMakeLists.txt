@@ -3,6 +3,9 @@ idf_component_register(
         "main.c" 
         "../includes/dht_manager.c" 
         "../includes/display_manager.c"
+        "../includes/wifi_manager.c"
+        "../includes/mqtt_manager.c"
+        "../includes/common.c"
     INCLUDE_DIRS 
         "." 
         "../includes"
