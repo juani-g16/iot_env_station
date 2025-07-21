@@ -62,7 +62,7 @@ The published data is displayed on a custom dashboard built with Node-RED, showi
 ## 🎨 Images
 
 Images of the project (architecture, circuit, dashboard, etc) can be found here: 
-- https://github.com/juani-g16/iot_env_station/tree/main/assets
+- [Images](https://github.com/juani-g16/iot_env_station/blob/main/assets/Images.md)
 
 ---
 
