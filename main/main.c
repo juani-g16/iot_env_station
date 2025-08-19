@@ -1,3 +1,18 @@
+/**
+ * @file main.c
+ * @brief IoT Environmental Station Main Application
+ * 
+ * This file contains the main application logic for an IoT environmental monitoring
+ * station that reads temperature and humidity data from a DHT sensor, displays the
+ * information on an OLED screen, and transmits the data via MQTT over WiFi.
+ * 
+ * The application uses FreeRTOS tasks for concurrent operation:
+ * - Timer-based sensor reading
+ * - OLED display updates
+ * - MQTT data transmission
+ * - WiFi connection management
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -16,16 +31,17 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 
-extern EventGroupHandle_t s_wifi_event_group;
-extern bool MQTT_CONNECTED;
-extern esp_mqtt_client_handle_t client;
+extern EventGroupHandle_t s_wifi_event_group;  /**< WiFi event group handle */
+extern bool MQTT_CONNECTED;                    /**< MQTT connection status flag */
+extern esp_mqtt_client_handle_t client;        /**< MQTT client handle */
 
-TimerHandle_t timerDHT;
-QueueHandle_t displayQueue;
-QueueHandle_t mqttQueue;
+TimerHandle_t timerDHT;     /**< Timer handle for periodic DHT sensor readings */
+QueueHandle_t displayQueue; /**< Queue for sensor data to be displayed on OLED */
+QueueHandle_t mqttQueue;    /**< Queue for sensor data to be sent via MQTT */
 
-static const char *TAG = "iot_env_station";
+static const char *TAG = "iot_env_station"; /**< Log tag for this module */
 
+/* Function prototypes */
 esp_err_t setup_timer(void);
 esp_err_t create_tasks(void);
 
@@ -34,6 +50,20 @@ void task_show_data_oled(void *args);
 void task_send_data_mqtt(void *args);
 void task_wifi(void *args);
 
+/**
+ * @fn void app_main(void)
+ * @brief Main application entry point
+ * 
+ * This function initializes the IoT environmental station by:
+ * - Setting up NVS (Non-Volatile Storage) for configuration data
+ * - Creating FreeRTOS queues for inter-task communication
+ * - Initializing the DHT sensor
+ * - Setting up the measurement timer
+ * - Creating and starting all application tasks
+ * 
+ * The function handles NVS initialization errors by erasing and reinitializing
+ * the flash if necessary.
+ */
 void app_main(void)
 {
     // Initialize NVS
@@ -52,6 +82,17 @@ void app_main(void)
     ESP_ERROR_CHECK(create_tasks());
 }
 
+/**
+ * @fn esp_err_t setup_timer(void)
+ * @brief Creates and starts the DHT sensor measurement timer
+ * 
+ * This function creates a FreeRTOS software timer that triggers periodic
+ * temperature and humidity measurements from the DHT sensor. The timer is
+ * configured to repeat at intervals defined by MEASURE_INTERVAL and calls
+ * the measure_temp_hum() callback function.
+ * 
+ * @return ESP_OK on successful timer creation and start, ESP_FAIL on error
+ */
 esp_err_t setup_timer(void)
 {
     timerDHT = xTimerCreate("Timer DHT",
@@ -75,6 +116,20 @@ esp_err_t setup_timer(void)
     return ESP_OK;
 }
 
+/**
+ * @fn esp_err_t create_tasks(void)
+ * @brief Creates and starts all FreeRTOS tasks for the application
+ * 
+ * This function creates three main tasks:
+ * 1. Display task (priority 1): Updates OLED display with sensor data
+ * 2. WiFi task (priority 3): Manages WiFi connection and reconnection
+ * 3. MQTT task (priority 2): Handles MQTT communication and data transmission
+ * 
+ * Each task is created with a stack size defined by STACK_SIZE and assigned
+ * appropriate priorities for proper system operation.
+ * 
+ * @return ESP_OK if all tasks are created successfully, ESP_FAIL if any task creation fails
+ */
 esp_err_t create_tasks(void)
 {
     static uint8_t ucParameterToPass;
@@ -115,6 +170,20 @@ esp_err_t create_tasks(void)
     return ESP_OK;
 }
 
+/**
+ * @fn void task_show_data_oled(void *args)
+ * @brief FreeRTOS task for displaying sensor data on OLED screen
+ * 
+ * This task continuously monitors the display queue for new sensor data and
+ * updates the OLED display with formatted temperature, humidity, date, and time
+ * information. The task:
+ * - Waits for data from the display queue
+ * - Parses the ISO8601 timestamp from sensor data
+ * - Formats date and time strings for display
+ * - Updates the OLED screen with current readings
+ * 
+ * @param args Pointer to task parameters (unused in this implementation)
+ */
 void task_show_data_oled(void *args)
 {
     dht_data_t sensorData = {0};
@@ -146,6 +215,22 @@ void task_show_data_oled(void *args)
     }
 }
 
+/**
+ * @fn void task_send_data_mqtt(void *args)
+ * @brief FreeRTOS task for transmitting sensor data via MQTT
+ * 
+ * This task handles MQTT communication by:
+ * - Waiting for WiFi connection establishment
+ * - Initializing MQTT client and SNTP time synchronization
+ * - Continuously monitoring the MQTT queue for sensor data
+ * - Converting sensor data to JSON format
+ * - Publishing data to the configured MQTT topic
+ * 
+ * The task only attempts to send data when both the queue has data and
+ * the MQTT client is connected to the broker.
+ * 
+ * @param args Pointer to task parameters (unused in this implementation)
+ */
 void task_send_data_mqtt(void *args)
 {
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
@@ -179,6 +264,21 @@ void task_send_data_mqtt(void *args)
     }
 }
 
+/**
+ * @fn void task_wifi(void *args)
+ * @brief FreeRTOS task for WiFi connection management
+ * 
+ * This task manages the WiFi connection by:
+ * - Initializing the WiFi subsystem and connecting to the configured network
+ * - Continuously monitoring the connection status using event groups
+ * - Automatically attempting reconnection if the connection is lost
+ * - Implementing a watchdog mechanism with configurable reconnect intervals
+ * 
+ * The task uses the WIFI_RECONNECT_INTERVAL_MS timeout to check connection
+ * status and triggers reconnection attempts when necessary.
+ * 
+ * @param args Pointer to task parameters (unused in this implementation)
+ */
 void task_wifi(void *args)
 {
     setup_wifi();
@@ -199,6 +299,22 @@ void task_wifi(void *args)
     }
 }
 
+/**
+ * @fn void measure_temp_hum(TimerHandle_t timer)
+ * @brief Timer callback function for reading DHT sensor data
+ * 
+ * This function is called periodically by the FreeRTOS timer to:
+ * - Read temperature and humidity data from the DHT sensor
+ * - Capture the current timestamp in ISO8601 format
+ * - Package the data into a dht_data_t structure
+ * - Send the data to both display and MQTT queues for processing
+ * 
+ * The function handles read errors by logging appropriate error messages
+ * and only sends data to queues when the sensor reading is successful.
+ * Queue send operations use a timeout to prevent blocking if queues are full.
+ * 
+ * @param timer Handle to the timer that triggered this callback (unused)
+ */
 void measure_temp_hum(TimerHandle_t timer)
 {
     esp_err_t res;

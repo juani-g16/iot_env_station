@@ -41,8 +41,24 @@
 /* The event group allows multiple bits for each event, but we only care about two events:
  * - we are connected to the AP with an IP
  * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_CONNECTED_BIT BIT0  /**< Event bit indicating successful WiFi connection */
 
+/**
+ * @fn void setup_wifi(void)
+ * @brief Initializes and configures WiFi connectivity for the ESP32
+ * 
+ * This function sets up the WiFi subsystem including:
+ * - WiFi driver initialization
+ * - Event loop configuration
+ * - Access Point connection with credentials from configuration
+ * - Retry mechanism for failed connections
+ * - Event handling for connection status
+ * 
+ * The function uses configuration parameters (SSID, password, security mode)
+ * defined through the ESP-IDF configuration system. It will attempt to
+ * connect to the configured access point and handle reconnection attempts
+ * according to the maximum retry settings.
+ */
 void setup_wifi(void);
 
 #endif
