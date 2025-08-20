@@ -3,6 +3,10 @@ sdkconfig
 sdkconfig.old
 .vscode/
 .devcontainer/
+docs/latex/
 components/
 dependencies.lock
 *.projbuild
+generate_docs*
+Doxyfile
+DOCUMENTATION.md
